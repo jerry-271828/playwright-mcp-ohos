@@ -34,7 +34,13 @@ def normalize(path):
         parts = line.replace("[", " ").replace("]", " ").split()
         if len(parts) > 6:
             name = parts[1]
-            if name.startswith(".") and "A" in line[line.find(name) + len(name):]:
+            flags = line[line.find(name) + len(name):]
+            # Never touch TLS sections (.tdata/.tbss, flag "T"): local-exec
+            # TP-relative offsets are baked into the code against the original
+            # PT_TLS p_align; re-aligning them to 64KB shifts musl's runtime
+            # TLS layout and every thread_local reads garbage (SIGSEGV in
+            # ThreadIdNameManager::GetName on chromium).
+            if name.startswith(".") and "A" in flags and "T" not in flags:
                 secs.append(name)
     if not secs:
         secs = [".gnu.hash", ".dynsym", ".dynstr", ".rela.dyn", ".rela.plt",
