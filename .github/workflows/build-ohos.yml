@@ -65,6 +65,7 @@ jobs:
             dist/* \
             scripts/install.sh \
             scripts/ohos_sign_sweep.py \
+            scripts/ohos_syscall_compat.c \
             scripts/shim.cjs \
             scripts/test-local.mjs \
             config/fonts.conf.in \

@@ -18,9 +18,9 @@ APP_CACHE_BASE="${PW_OHOS_CACHE:-/data/storage/el2/base/cache}"
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mFATAL:\033[0m %s\n' "$*" >&2; exit 1; }
 
-for t in node npm python3 tar zstd sha256sum binary-sign-tool llvm-strip llvm-objcopy llvm-readelf; do
+for t in node npm python3 tar zstd sha256sum binary-sign-tool llvm-strip llvm-objcopy llvm-readelf clang; do
   command -v "$t" >/dev/null 2>&1 \
-    || die "缺少 $t（brew install node python3 zstd gnu-tar coreutils devel-base）"
+    || die "缺少 $t（brew install node python3 zstd gnu-tar coreutils devel-base llvm）"
 done
 
 mkdir -p "$ROOT"
@@ -38,17 +38,20 @@ if [ -z "$TARBALL" ]; then
   gh release download --repo "$REPO" --dir "$DL" \
     --pattern 'pw-chromium-ohos-*.tar.zst' --pattern 'SHA256SUMS' \
     --pattern 'ohos_sign_sweep.py' --pattern 'shim.cjs' \
+    --pattern 'ohos_syscall_compat.c' \
     --pattern 'fonts.conf.in' --pattern 'test-local.mjs'
   (cd "$DL" && grep 'pw-chromium-ohos-' SHA256SUMS | sha256sum -c -) || die "sha256 校验失败"
   TARBALL="$(ls "$DL"/pw-chromium-ohos-*.tar.zst | head -1)"
   SIGN_SWEEP="$DL/ohos_sign_sweep.py"
   SHIM_SRC="$DL/shim.cjs"
+  SYSCALL_C="$DL/ohos_syscall_compat.c"
   FONTS_IN="$DL/fonts.conf.in"
   TEST_SRC="$DL/test-local.mjs"
 else
   HERE="$(cd "$(dirname "$0")" && pwd)"
   SIGN_SWEEP="$HERE/ohos_sign_sweep.py"
   SHIM_SRC="$HERE/shim.cjs"
+  SYSCALL_C="$HERE/ohos_syscall_compat.c"
   FONTS_IN="$HERE/../config/fonts.conf.in"
   TEST_SRC="$HERE/test-local.mjs"
   [ -f "$FONTS_IN" ] || FONTS_IN="$HERE/fonts.conf.in"
@@ -78,6 +81,22 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund --ignore-scr
 cp "$SHIM_SRC" "$ROOT/shim.cjs"
 [ -f "$TEST_SRC" ] && cp "$TEST_SRC" "$ROOT/test-local.mjs"
 
+# Compile the native LD_PRELOAD compat shim (device-side clang auto-signs the
+# .so, so it loads past the OHOS code-sign check). It papers over three gaps
+# between stock Alpine chromium and the HarmonyOS runtime: landlock syscalls
+# that the sandbox turns into SIGSYS, the /proc status "Groups:" line missing
+# its trailing space (crashpad parse), and the O_RDONLY fd contract for the
+# fixed-up status handle. See scripts/ohos_syscall_compat.c for details.
+SYSCALL_SO=""
+if [ -f "$SYSCALL_C" ]; then
+  say "编译 OHOS syscall/procfs 兼容 shim"
+  if clang -shared -fPIC -O2 -o "$ROOT/libohos_syscall_compat.so" "$SYSCALL_C"; then
+    SYSCALL_SO="$ROOT/libohos_syscall_compat.so"
+  else
+    printf '\033[1;33m警告:\033[0m shim 编译失败，跳过（chromium 可能无法在本机启动）\n' >&2
+  fi
+fi
+
 say "准备可写目录（/tmp 是只读 erofs，浏览器临时文件必须走应用沙箱 ext4）"
 CACHE_FC="$APP_CACHE_BASE/pw-cache/fontconfig"
 mkdir -p "$APP_CACHE_BASE/pw-tmp" "$APP_CACHE_BASE/pw-profile" "$CACHE_FC" "$ROOT/output"
@@ -87,8 +106,14 @@ mkdir -p "$APP_CACHE_BASE/pw-tmp" "$APP_CACHE_BASE/pw-profile" "$CACHE_FC" "$ROO
 sed -e "s|@PREFIX@|$P|g" -e "s|@CACHE@|$CACHE_FC|g" "$FONTS_IN" > "$ROOT/fonts.conf"
 
 MUSL_COMPAT="$HOME/.harmonybrew/opt/musl-compat/lib/libmusl_compat.so"
+# LD_PRELOAD order matters: our syscall/procfs shim first, then the harmonybrew
+# musl-compat lib that supplies glibc-only symbols chromium needs (qsort_r,
+# __res_state, ...). Join with ':' and drop empty entries.
 LDP=""
-[ -f "$MUSL_COMPAT" ] && LDP="$MUSL_COMPAT"
+for lib in "$SYSCALL_SO" "$MUSL_COMPAT"; do
+  [ -n "$lib" ] && [ -f "$lib" ] || continue
+  if [ -z "$LDP" ]; then LDP="$lib"; else LDP="$LDP:$lib"; fi
+done
 
 cat > "$ROOT/mcp-config.json" <<EOF
 {
