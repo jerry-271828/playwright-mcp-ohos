@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>@PREFIX@/usr/share/fonts</dir>
+  <cachedir>@CACHE@</cachedir>
+</fontconfig>

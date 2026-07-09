@@ -1,0 +1,71 @@
+name: build-ohos
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  ALPINE_VERSION: "3.22"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble Alpine chromium prefix (aarch64 musl)
+        run: docker run --rm -v "$PWD:/w" "alpine:${ALPINE_VERSION}" sh /w/ci/assemble.sh
+
+      - name: Audit ELF closure against OHOS baselines
+        run: docker run --rm -v "$PWD:/w" "alpine:${ALPINE_VERSION}" sh /w/ci/audit.sh
+
+      - name: Smoke test (playwright-core + MCP stdio handshake)
+        run: docker run --rm --shm-size=1g -v "$PWD:/w" "alpine:${ALPINE_VERSION}" sh /w/ci/smoke.sh
+
+      - name: Pack tarball
+        run: |
+          CHROMIUM_VER="$(cat out/meta/VERSION)"
+          mkdir -p dist
+          sudo tar -C out/prefix --sort=name --mtime='1970-01-01 00:00:00 UTC' \
+            --owner=0 --group=0 --numeric-owner --zstd \
+            -cf "dist/pw-chromium-ohos-${CHROMIUM_VER}-aarch64.tar.zst" .
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          ls -la dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pw-chromium-ohos
+          path: dist/*
+
+      - name: Upload meta / audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meta-and-audit
+          path: out/meta/
+          if-no-files-found: ignore
+
+      - name: Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" --title "$TAG" \
+            --notes "Alpine ${ALPINE_VERSION} chromium $(cat out/meta/VERSION) repacked for HarmonyOS PC (aarch64 musl). Install: download install.sh, then: sh install.sh" \
+            || true
+          gh release upload "$TAG" --clobber \
+            dist/* \
+            scripts/install.sh \
+            scripts/ohos_sign_sweep.py \
+            scripts/shim.cjs \
+            scripts/test-local.mjs \
+            config/fonts.conf.in \
+            baselines/ohos-musl-symbols.txt
