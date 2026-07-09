@@ -58,7 +58,9 @@ find "$P" -type f | while IFS= read -r f; do
 done | sort -u > "$M/elfs.txt"
 echo "ELF files in prefix: $(wc -l < "$M/elfs.txt")"
 
-RP='$ORIGIN:$ORIGIN/..:$ORIGIN/../..:$ORIGIN/../lib:$ORIGIN/../usr/lib:$ORIGIN/../../usr/lib'
+# $ORIGIN/pulseaudio: libpulse.so.0 finds libpulsecommon via a private
+# RUNPATH (/usr/lib/pulseaudio) that this rpath pass overwrites.
+RP='$ORIGIN:$ORIGIN/..:$ORIGIN/../..:$ORIGIN/../lib:$ORIGIN/../usr/lib:$ORIGIN/../../usr/lib:$ORIGIN/pulseaudio'
 : > "$M/patchelf-warn.log"
 while IFS= read -r f; do
   patchelf --set-rpath "$RP" "$f" 2>>"$M/patchelf-warn.log" \

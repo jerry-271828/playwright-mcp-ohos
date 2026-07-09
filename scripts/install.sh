@@ -104,7 +104,7 @@ cat > "$ROOT/mcp-config.json" <<EOF
     "--output-dir", "$ROOT/output"
   ],
   "env": {
-    "LD_LIBRARY_PATH": "$P/usr/lib:$P/lib:$P/usr/lib/chromium",
+    "LD_LIBRARY_PATH": "$P/usr/lib:$P/lib:$P/usr/lib/chromium:$P/usr/lib/pulseaudio",
     "LD_PRELOAD": "$LDP",
     "FONTCONFIG_FILE": "$ROOT/fonts.conf",
     "TMPDIR": "$APP_CACHE_BASE/pw-tmp",

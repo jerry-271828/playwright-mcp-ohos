@@ -13,21 +13,39 @@ apk add --no-cache binutils >/dev/null
 cd "$M"
 [ -s elfs.txt ]
 
-# provided sonames: SONAME + basename of every ELF, plus loader-internal names
-: > provided.raw
+# --- soname closure, simulated the way the musl loader actually searches ---
+# Globally findable providers are ONLY the ELFs living in the launcher
+# LD_LIBRARY_PATH dirs (keep in sync with smoke.sh / install.sh); an ELF in any
+# other prefix dir is reachable solely through its consumer's own $ORIGIN
+# rpath, i.e. from the same directory. This catches libs whose private RUNPATH
+# (e.g. libpulse -> /usr/lib/pulseaudio) got overwritten by the rpath pass.
 while IFS= read -r f; do
-  basename "$f" >> provided.raw
-  readelf -d "$f" 2>/dev/null | sed -n 's/.*(SONAME).*\[\(.*\)\].*/\1/p' >> provided.raw
-done < elfs.txt
-printf 'libc.so\nlibc.musl-aarch64.so.1\nld-musl-aarch64.so.1\n' >> provided.raw
-sort -u provided.raw > provided.txt
+  rel="${f#$P/}"; dir="${rel%/*}"
+  { basename "$f"
+    readelf -d "$f" 2>/dev/null | sed -n 's/.*(SONAME).*\[\(.*\)\].*/\1/p'
+  } | awk -v d="$dir" 'NF{print "P\t" d "\t" $0}'
+  readelf -d "$f" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p' \
+    | awk -v d="$dir" 'NF{print "N\t" d "\t" $0}'
+done < elfs.txt > graph.tsv
 
-while IFS= read -r f; do
-  readelf -d "$f" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'
-done < elfs.txt | sort -u > needed.txt
+awk -F'\t' '$1 == "N" {print $3}' graph.tsv | sort -u > needed.txt
 
-comm -23 needed.txt provided.txt > missing-sonames.txt
-echo "== sonames: $(wc -l < needed.txt) needed, $(wc -l < missing-sonames.txt) missing =="
+awk -F'\t' '
+BEGIN {
+  nsd = split("usr/lib lib usr/lib/chromium usr/lib/pulseaudio", a, " ");
+  for (i = 1; i <= nsd; i++) sd[a[i]] = 1;
+  glob["libc.so"] = glob["libc.musl-aarch64.so.1"] = glob["ld-musl-aarch64.so.1"] = 1;
+}
+$1 == "P" { bydir[$2 "\t" $3] = 1; if ($2 in sd) glob[$3] = 1; next }
+$1 == "N" { nn++; ndir[nn] = $2; nso[nn] = $3 }
+END {
+  for (i = 1; i <= nn; i++) {
+    if (nso[i] in glob) continue;
+    if ((ndir[i] "\t" nso[i]) in bydir) continue;
+    print ndir[i] "\t" nso[i];
+  }
+}' graph.tsv | sort -u > missing-sonames.txt
+echo "== sonames: $(wc -l < needed.txt) distinct needed, $(wc -l < missing-sonames.txt) unresolved from runtime search paths =="
 cat missing-sonames.txt
 
 # symbol closure (musl world has no symbol versioning; strip @VER decorations)
