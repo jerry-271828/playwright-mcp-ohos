@@ -29,6 +29,9 @@ sed -e "s|@PREFIX@|$P|g" -e "s|@CACHE@|/smoke/cache/fontconfig|g" \
 export FONTCONFIG_FILE=/smoke/fonts.conf
 export XDG_CACHE_HOME=/smoke/cache
 
-node "$W/ci/smoke.mjs" "$CHROME"
-node "$W/ci/smoke-mcp.mjs" "$CHROME"
+# ESM import resolution walks up from the script's own directory, so the smoke
+# scripts must live next to /smoke/node_modules, not under /w/ci.
+cp "$W/ci/smoke.mjs" "$W/ci/smoke-mcp.mjs" /smoke/
+node /smoke/smoke.mjs "$CHROME"
+node /smoke/smoke-mcp.mjs "$CHROME"
 echo "SMOKE OK"
