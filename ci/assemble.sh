@@ -31,7 +31,9 @@ sed -n 's/^chromium-\([0-9][0-9.]*\)-r[0-9]* .*/\1/p' "$M/manifest.txt" | head -
 echo "chromium version: $(cat "$M/VERSION")"
 [ -s "$M/VERSION" ]
 
-CHROME_REL="$(cd "$P" && find usr/lib/chromium -maxdepth 1 -name chrome -type f | head -1)"
+# chromium >=142 ships the real binary as "chromium" with "chrome" left as a
+# symlink to it; -type f skips the symlink and lands on the actual ELF either way.
+CHROME_REL="$(cd "$P" && find usr/lib/chromium -maxdepth 1 \( -name chrome -o -name chromium \) -type f | sort | head -1)"
 [ -n "$CHROME_REL" ] || { echo "FATAL: chrome binary not found in prefix"; exit 1; }
 printf '%s\n' "$CHROME_REL" > "$M/CHROME_PATH"
 CHROME="$P/$CHROME_REL"
